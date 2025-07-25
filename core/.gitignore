@@ -1,0 +1,18 @@
+# Verilator build directory
+obj_dir/
+
+# Coverage and waveform outputs
+*.vcd
+*.log
+coverage.dat
+logs/
+
+# Stamp files for build system
+.stamp.*
+
+# Core dumps
+core
+
+# GTKWave bookmark/config files
+*.sav
+
