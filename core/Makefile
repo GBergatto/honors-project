@@ -1,11 +1,18 @@
-MODULE = hp_core
+MODULE ?= hp_core
 VERILATOR = verilator
 VCD_OUT = vlt_dump.vcd
 
-# Automatically find all RTL and TB sources
-SRC_VERILOG := $(wildcard rtl/*.v rtl/*.sv)
-SRC_CPP     := $(wildcard tb/*.cpp tb/*.cc)
-ALL_SOURCES := $(SRC_VERILOG) $(SRC_CPP)
+# Automatically find RTL and TB sources
+PKG_FILES   := rtl/core_types_pkg.sv # packages must be verilated first
+SRC_VERILOG := $(filter-out $(PKG_FILES), $(wildcard rtl/*.v rtl/*.sv))
+# Only select testbenches about the current top module
+TB_CPP      := $(wildcard tb/$(MODULE)*.cpp tb/$(MODULE)*.cc)
+ifneq ($(MAKECMDGOALS),clean) # always allow "make clean"
+ifeq ($(TB_CPP),)
+$(error No C++ testbench found matching "$(MODULE)*.cpp" in tb/)
+endif
+endif
+ALL_SOURCES := $(PKG_FILES) $(SRC_VERILOG) $(TB_CPP)
 
 # Generate C++ in executable form
 VERILATOR_FLAGS += -cc --exe
@@ -37,7 +44,7 @@ verilate: .stamp.verilate
 	@echo
 	@echo "### VERILATING ###"
 	$(VERILATOR) $(VERILATOR_FLAGS) \
-	  $(SRC_VERILOG) $(SRC_CPP)
+	  $(ALL_SOURCES) --top-module $(MODULE)
 	@touch .stamp.verilate
 
 # 2) Build the C++ simulation using the Verilator‑generated Makefile
