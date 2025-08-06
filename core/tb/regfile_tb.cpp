@@ -1,29 +1,8 @@
 #include "Vregfile.h"
 #include "verilated.h"
+#include "common.hpp"
 #include <iostream>
 #include <cstdint>
-
-static int failures = 0;
-
-// Check helper: compares `got` vs `exp`, prints result
-void check(const char* name, uint32_t got, uint32_t exp) {
-    if (got != exp) {
-        std::cerr << "× FAIL: " << name
-            << " | expected=0x" << std::hex << exp
-            << " got=0x" << std::hex << got << std::dec << "\n";
-        ++failures;
-    } else {
-        std::cout << "✓ PASS: " << name
-            << " | value=0x" << std::hex << got << std::dec << "\n";
-    }
-}
-
-void tick(Vregfile* top) {
-    top->clk = 1;
-    top->eval();
-    top->clk = 0;
-    top->eval();
-}
 
 int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);

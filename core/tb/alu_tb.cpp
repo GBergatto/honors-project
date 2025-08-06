@@ -1,6 +1,6 @@
 #include "Valu.h"
 #include "verilated.h"
-#include <iostream>
+#include "common.hpp"
 #include <cstdint>
 #include <cassert>
 
@@ -11,15 +11,7 @@ void test_op(Valu* dut, uint32_t op1, uint32_t op2, uint8_t alu_op, uint32_t exp
 
     dut->eval();
 
-    if (dut->out != expected) {
-        std::cerr << "× Test failed: " << name
-                  << " | op1=" << op1
-                  << " op2=" << op2
-                  << " expected=" << expected
-                  << " got=" << dut->out << std::endl;
-    } else {
-        std::cout << "✓ Test passed: " << name << std::endl;
-    }
+    check(name, dut->out, expected);
 }
 
 int main(int argc, char **argv) {
