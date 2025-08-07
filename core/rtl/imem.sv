@@ -3,10 +3,10 @@ module imem #(
 )(
    input logic clk,
    input logic [ADDRESS_WIDTH-1:0] addr,
-   output logic [32:0] inst
+   output logic [31:0] inst
 );
 
-logic [32:0] rom [1<<ADDRESS_WIDTH];
+logic [31:0] rom [1<<ADDRESS_WIDTH];
 
 initial begin
    // load program

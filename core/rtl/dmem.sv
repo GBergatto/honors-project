@@ -4,11 +4,11 @@ module dmem #(
    input logic clk,
    input logic we, // write enable
    input logic [ADDRESS_WIDTH-1:0] addr,
-   input logic [32:0] wdata,
-   output logic [32:0] rdata
+   input logic [31:0] wdata,
+   output logic [31:0] rdata
 );
 
-logic [32:0] ram [1<<ADDRESS_WIDTH];
+logic [31:0] ram [1<<ADDRESS_WIDTH];
 
 // synchronous read + write
 always_ff @(posedge clk) begin
