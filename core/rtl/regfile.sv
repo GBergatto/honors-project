@@ -11,6 +11,14 @@ module regfile (
 
 logic [31:0] regs[32];
 
+`ifdef verilator
+    function [31:0] get_reg;
+        input [4:0] index; // or input [4:0] index;
+        // verilator public
+        get_reg = regs[index];
+    endfunction
+`endif
+
 // asynchronous read (x0 is hardwired to zero)
 assign rs1_data = (rs1 == 5'h0) ? 32'h0 : regs[rs1];
 assign rs2_data = (rs2 == 5'h0) ? 32'h0 : regs[rs2];

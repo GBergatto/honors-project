@@ -7,6 +7,9 @@ obj_dir/
 coverage.dat
 logs/
 
+# Test bench firmaware
+tb/firmware.hex
+
 # Stamp files for build system
 .stamp.*
 
