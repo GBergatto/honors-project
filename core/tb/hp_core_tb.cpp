@@ -1,3 +1,4 @@
+// tb/core_tb_mem.cpp
 #include "Vhp_core.h"
 #include "Vhp_core_hp_core.h"
 #include "Vhp_core_regfile.h"
@@ -6,68 +7,65 @@
 #include "common.hpp"
 #include <cstdint>
 #include <fstream>
-
-int dtime = 0;
+#include <cstdlib>
 
 int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);
 
-    // 1) Prepare imem_init.hex
+    // 1) Prepare firmware
     {
         std::ofstream ofs("tb/firmware.hex");
-        ofs << "00500093\n"  // addi x1, x0, 5
-            << "00700113\n"  // addi x2, x0, 7
-            << "002081B3\n"  // add  x3, x1, x2
-            << "00119093\n"  // slli x1, x3, 1  ; x1 = x3 << 1
-            ;
-        ofs.close();
+        ofs << "00500093\n" // addi x1, x0, 5
+            << "00700113\n" // addi x2, x0, 7
+            << "002081B3\n" // add  x3, x1, x2
+            << "00302023\n" // sw   x3, 0(x0)
+            << "00002203\n" // lw   x4, 0(x0)
+            << "00121293\n"; // slli x5, x4, 1;
     }
 
-    // 2) Instantiate core
+    // 2) Instantiate core + tracing
     VerilatedContext* contextp = new VerilatedContext;
+    contextp->commandArgs(argc, argv);
     VerilatedVcdC* tfp = new VerilatedVcdC;
-    Vhp_core* dut = new Vhp_core;
+
+    Vhp_core* dut = new Vhp_core{contextp};
 
     contextp->traceEverOn(true);
     dut->trace(tfp, 99);
     tfp->open("vlt_dump.vcd");
 
+    // 3) Initial conditions
+    int time = 0;
     dut->clk = 0;
     dut->eval();
-    tfp->dump(dtime++);
+    tfp->dump(time++);
 
-    // 3) Run
-    for (int i = 0; i < 4; i++) {
+    // 4) Run for instructions + 1 extra cycle for final writeback
+    const int n_instr = 6;
+    for (int cycle = 0; cycle < n_instr + 1; ++cycle) {
+        // rising edge
         dut->clk = 1;
         dut->eval();
-        tfp->dump(dtime++);
+        tfp->dump(time++);
 
+        // falling edge
         dut->clk = 0;
         dut->eval();
-        tfp->dump(dtime++);
+        tfp->dump(time++);
     }
 
-    // the output of the ALU is written to the register file
-    // on the next positive clock edge
-    dut->clk = 1;
-    dut->eval();
-    tfp->dump(dtime++);
+    // 5) Read back registers via Verilator accessor
+    uint32_t x4 = dut->hp_core->regfile_i->get_reg(4);
+    check("x4 == 12 (loaded from memory)", x4, 12u);
 
-    // 4) Check register x1
-    uint32_t x1 = dut->hp_core->regfile_i->get_reg(1);
-    check("(5 + 7) << 1", x1, 24);
+    uint32_t x5 = dut->hp_core->regfile_i->get_reg(5);
+    check("x5 == 24 (x4 << 1)", x5, 24u);
 
-    // simulate one extra cycle for a nicer waveform
-    dut->clk = 0;
-    dut->eval();
-    tfp->dump(dtime++);
-    dut->clk = 1;
-    dut->eval();
-    tfp->dump(dtime++);
-
+    // 6) Finalize
+    tfp->flush();
     tfp->close();
-
+    delete tfp;
     delete dut;
-    return failures ? 1 : 0;
+    delete contextp;
 }
 

@@ -12,8 +12,7 @@ module regfile (
 logic [31:0] regs[32];
 
 `ifdef verilator
-    function [31:0] get_reg;
-        input [4:0] index; // or input [4:0] index;
+    function [31:0] get_reg (input [4:0] index);
         // verilator public
         get_reg = regs[index];
     endfunction

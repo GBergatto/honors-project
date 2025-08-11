@@ -50,18 +50,22 @@ control control_i (
    .funct3 (funct3),
    .funct7 (funct7),
    .alu_src (alu_src),
-   .reg_write (reg_write)
+   .reg_write (reg_write),
+   .mem_read (mem_read),
+   .mem_write (mem_write),
+   .mem_to_reg (mem_to_reg)
 );
 
 /* Register File */
-logic reg_write;
-logic [31:0] rs1_data, rs2_data;
+logic reg_write, mem_to_reg, mem_read, mem_write;
+logic [31:0] rs1_data, rs2_data, rd_data;
+assign rd_data = (mem_to_reg) ? mem_out : alu_out;
 regfile regfile_i (
    .clk (clk),
    .rs1 (rs1),
    .rs2 (rs2),
    .rd (rd),
-   .rd_data (alu_out),
+   .rd_data (rd_data),
    .write (reg_write),
    .rs1_data (rs1_data),
    .rs2_data (rs2_data)
@@ -84,6 +88,17 @@ alu alu_i (
    .op2 (y),
    .alu_op (alu_op),
    .out (alu_out)
+);
+
+/* Data Memory */
+logic [31:0] mem_out;
+dmem #(8) dmem_i (
+   .clk (clk),
+   .re (mem_read),
+   .we (mem_write),
+   .addr (alu_out),
+   .wdata (rs2_data),
+   .rdata (mem_out)
 );
 
 endmodule
