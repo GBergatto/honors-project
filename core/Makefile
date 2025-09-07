@@ -74,7 +74,7 @@ coverage:
 waves:
 	@echo
 	@echo "### OPENING GTKWave ###"
-	gtkwave $(VCD_OUT)
+	@nohup gtkwave $(VCD_OUT) >/dev/null 2>&1 &
 
 # 6) Cleanup
 clean:
