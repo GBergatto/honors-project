@@ -9,7 +9,7 @@ logic [31:2] pc, next_pc; // no low 2 bits because we're only addressing 32-bit 
 always_ff @(posedge clk or posedge rst) begin
    if (rst)
       pc <= 30'h0;
-   else
+   else if (!stall)
       pc <= next_pc;
 end
 
@@ -19,6 +19,7 @@ always_comb next_pc = pc + 1;
 /* Instruction Memory */
 logic [31:0] inst;
 imem #(8) imem_i (
+   .rst (rst),
    .clk (clk),
    .pc (pc),
    .inst (inst)
@@ -31,7 +32,7 @@ always_ff @(posedge clk or posedge rst) begin
    if (rst) begin
       IFID_next_pc <= 30'b0;
       IFID_inst <= 32'b0;
-   end else begin
+   end else if (!stall) begin
       IFID_next_pc <= next_pc;
       IFID_inst <= inst;
    end
@@ -81,6 +82,12 @@ alu_control alu_control_i (
    .alu_op (alu_op)
 );
 
+/* Hazard Detection (during ID) */
+logic stall;
+assign stall = (IDEX_rd  != 0 && IDEX_ctrl.reg_write  && (rs1 == IDEX_rd  || (!alu_src && rs2 == IDEX_rd ))) ||
+               (EXMEM_rd != 0 && EXMEM_ctrl.reg_write && (rs1 == EXMEM_rd || (!alu_src && rs2 == EXMEM_rd))) ||
+               (MEMWB_rd != 0 && MEMWB_ctrl.reg_write && (rs1 == MEMWB_rd || (!alu_src && rs2 == MEMWB_rd)));
+
 /* Register File */
 logic reg_write, mem_to_reg, mem_read, mem_write;
 logic [31:0] rs1_data, rs2_data, wb_data;
@@ -121,6 +128,10 @@ always_ff @(posedge clk or posedge rst) begin
       IDEX_imm <= 0;
       IDEX_rs1 <= 0;
       IDEX_rs2 <= 0;
+   end else if (stall) begin
+      // inject bubble in the EX stage, i.e. do nothing for one cycle
+      IDEX_ctrl <= '0;
+      IDEX_rd <= '0;
    end else begin
       IDEX_ctrl.alu_op <= alu_op;
       IDEX_ctrl.alu_src <= alu_src;

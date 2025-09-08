@@ -2,6 +2,7 @@ module imem #(
    parameter int unsigned AW = 8 // address width
 )(
    input logic clk,
+   input logic rst,
    /* verilator lint_off UNUSEDSIGNAL */
    input logic [29:0] pc,
    output logic [31:0] inst
@@ -15,9 +16,12 @@ initial begin
 end
 
 // synchronous read
-always_ff @(posedge clk) begin
+always_ff @(posedge clk or posedge rst) begin
     // use only the low AW bits of PC as the ROM index
-   inst <= rom[pc[AW-1:0]];
+    if (rst)
+        inst <= 32'h0; // don't read while rst is high
+    else
+        inst <= rom[pc[AW-1:0]];
 end
 
 endmodule
