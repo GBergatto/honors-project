@@ -20,8 +20,10 @@ VERILATOR_FLAGS += -cc --exe
 #VERILATOR_FLAGS += -MMD
 # Optimize
 VERILATOR_FLAGS += -x-assign fast
-# Warn abount lint issues; may not want this on less solid designs
+# Warn abount lint issues
 VERILATOR_FLAGS += -Wall
+# Link yaml-cpp library
+VERILATOR_FLAGS += --LDFLAGS -lyaml-cpp
 # Make waveforms
 VERILATOR_FLAGS += --trace-vcd
 # Check SystemVerilog assertions
@@ -60,7 +62,7 @@ simulate: build
 	@echo
 	@echo "### SIMULATING ###"
 	@rm -rf logs
-	@mkdir -p logs
+	@mkdir -p logs/waves
 	@obj_dir/V$(MODULE) +trace
 
 # 4) Generate annotated coverage
@@ -70,14 +72,7 @@ coverage:
 	@rm -rf logs/annotated
 	verilator_coverage --annotate logs/annotated logs/coverage.dat
 
-# 5) View the waveform
-waves:
-	@echo
-	@echo "### OPENING GTKWave ###"
-	@nohup gtkwave $(VCD_OUT) >/dev/null 2>&1 &
-
-# 6) Cleanup
+# 5) Cleanup
 clean:
-	@echo "### CLEANING ###"
 	@rm -rf .stamp.* obj_dir logs *.log *.dmp *.vcd coverage.dat core
 

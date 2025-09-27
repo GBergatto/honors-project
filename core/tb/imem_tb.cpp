@@ -11,7 +11,7 @@ int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);
 
     // 1) Read the hex file into a vector of expected values
-    const std::string hex_path = "tb/imem_init.hex";
+    const std::string hex_path = "tb/roms/firmware.hex";
     std::ifstream hexfile(hex_path);
     if (!hexfile.is_open()) {
         std::cerr << "× ERROR: Cannot open " << hex_path << "\n";
@@ -38,12 +38,12 @@ int main(int argc, char** argv) {
     // 2) Instantiate the DUT
     Vimem* top = new Vimem;
     top->clk = 0;
-    top->addr = 0;
+    top->pc = 0;
     top->eval();
 
     // 3) Test every address
     for (size_t i = 0; i < expected.size(); ++i) {
-        top->addr = i;
+        top->pc = i;
         tick(top);
         check(("imem[" + std::to_string(i) + "]").c_str(),
               top->inst, expected[i]);

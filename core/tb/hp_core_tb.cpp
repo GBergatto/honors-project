@@ -1,71 +1,142 @@
-// tb/core_tb_mem.cpp
 #include "Vhp_core.h"
 #include "Vhp_core_hp_core.h"
 #include "Vhp_core_regfile.h"
 #include "verilated.h"
 #include "verilated_vcd_c.h"
 #include "common.hpp"
+
 #include <cstdint>
-#include <fstream>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <map>
+#include <yaml-cpp/yaml.h>  // requires yaml-cpp
 
-int main(int argc, char** argv) {
-    Verilated::commandArgs(argc, argv);
+namespace fs = std::filesystem;
 
-    // 1) Prepare firmware
-    {
-        std::ofstream ofs("tb/firmware.hex");
-        ofs << "00500093\n" // addi x1, x0, 5
-            << "00700113\n" // addi x2, x0, 7
-            << "002081B3\n" // add  x3, x1, x2
-            << "00302023\n" // sw   x3, 0(x0)
-            << "00002203\n" // lw   x4, 0(x0)
-            << "00121293\n"; // slli x5, x4, 1;
+// Convert firmware from binary into HEX
+int bin_to_hex(const fs::path& bin_file, const fs::path& hex_file) {
+    std::ifstream ifs(bin_file, std::ios::binary);
+    if (!ifs) throw std::runtime_error("Cannot open " + bin_file.string());
+
+    std::ofstream ofs(hex_file);
+    if (!ofs) throw std::runtime_error("Cannot open " + hex_file.string());
+
+    int n_instructions = 0;
+    uint8_t buf[4];
+    while (ifs.read(reinterpret_cast<char*>(buf), 4) || ifs.gcount() > 0) {
+        // pad with zeros if less than 4 bytes at the end
+        uint32_t word = 0;
+        for (size_t i = 0; i < ifs.gcount(); ++i) {
+            word |= buf[i] << (8 * i); // little-endian
+        }
+        ofs << std::hex << std::setw(8) << std::setfill('0') << word << "\n";
+        n_instructions++;
+    }
+    return n_instructions;
+}
+
+// Assemble RISC-V assembly file into firmaware.hex
+int assemble_to_hex(const fs::path& asm_file, const fs::path& hex_file) {
+    std::string elf_file = asm_file.stem().string() + ".elf";
+    std::string bin_file = asm_file.stem().string() + ".bin";
+
+    // Assemble
+    if (std::system(("riscv32-unknown-elf-as -march=rv32i -mabi=ilp32 " 
+                     + asm_file.string() + " -o " + elf_file).c_str()) != 0)
+        throw std::runtime_error("Assembler failed");
+
+    // Objcopy to raw binary
+    if (std::system(("riscv32-unknown-elf-objcopy -O binary " + elf_file
+                    + " " + bin_file).c_str()) != 0)
+        throw std::runtime_error("Objcopy failed");
+
+    // Convert binary to hex
+    int n_instructions = bin_to_hex(bin_file, hex_file);
+
+    // Cleanup
+    fs::remove(elf_file);
+    fs::remove(bin_file);
+
+    return n_instructions;
+}
+
+void run_test(const fs::path& asm_file, const fs::path& yaml_file) {
+    std::cout << "\n[TEST] " << asm_file.stem().string() << std::endl;
+
+    // 1) assemble program
+    fs::path hex_file = "tb/roms/firmware.hex";
+    int n_instructions = assemble_to_hex(asm_file, hex_file);
+
+    // 2) load expected register values from YAML file
+    YAML::Node exp = YAML::LoadFile(yaml_file.string());
+    std::map<int, uint32_t> expected;
+    for (auto it = exp.begin(); it != exp.end(); ++it) {
+        std::string reg = it->first.as<std::string>();
+        int idx = std::stoi(reg.substr(1));
+        uint32_t val = it->second.as<uint32_t>();
+        expected[idx] = val;
     }
 
-    // 2) Instantiate core + tracing
+    // 3) set up simulation
     VerilatedContext* contextp = new VerilatedContext;
-    contextp->commandArgs(argc, argv);
     VerilatedVcdC* tfp = new VerilatedVcdC;
-
     Vhp_core* dut = new Vhp_core{contextp};
 
     contextp->traceEverOn(true);
     dut->trace(tfp, 99);
-    tfp->open("vlt_dump.vcd");
+    tfp->open(("logs/waves/" + asm_file.stem().string() + ".vcd").c_str());
 
-    // 3) Initial conditions
     int time = 0;
     dut->clk = 0;
+    dut->rst = 1;
     dut->eval();
     tfp->dump(time++);
 
-    // 4) Run for instructions + 1 extra cycle for final writeback
-    const int n_instr = 6;
-    for (int cycle = 0; cycle < n_instr + 1; ++cycle) {
-        // rising edge
-        dut->clk = 1;
-        dut->eval();
-        tfp->dump(time++);
+    // reset
+    for (int i = 0; i < 2; i++) {
+        dut->clk = 1; dut->eval(); tfp->dump(time++);
+        dut->clk = 0; dut->eval(); tfp->dump(time++);
+    }
+    dut->rst = 0;
 
-        // falling edge
-        dut->clk = 0;
-        dut->eval();
-        tfp->dump(time++);
+    // 4) run
+    for (int cycle = 0; cycle < 5 * n_instructions; ++cycle) {
+        dut->clk = 1; dut->eval(); tfp->dump(time++);
+        dut->clk = 0; dut->eval(); tfp->dump(time++);
     }
 
-    // 5) Read back registers via Verilator accessor
-    uint32_t x4 = dut->hp_core->regfile_i->get_reg(4);
-    check("x4 == 12 (loaded from memory)", x4, 12u);
+    // 5) check registers
+    for (auto& [idx, exp_val] : expected) {
+        uint32_t got = dut->hp_core->regfile_i->get_reg(idx);
+        check("x" + std::to_string(idx), got, exp_val);
+    }
 
-    uint32_t x5 = dut->hp_core->regfile_i->get_reg(5);
-    check("x5 == 24 (x4 << 1)", x5, 24u);
-
-    // 6) Finalize
+    // cleanup
     tfp->flush();
     tfp->close();
     delete tfp;
     delete dut;
     delete contextp;
+}
+
+int main(int argc, char** argv) {
+    Verilated::commandArgs(argc, argv);
+
+    for (auto& entry : fs::directory_iterator("tb/roms")) {
+        if (entry.path().extension() == ".s") {
+            fs::path asm_file = entry.path();
+            fs::path yaml_file = asm_file;
+            yaml_file.replace_extension(".yaml");
+            if (fs::exists(yaml_file)) {
+                run_test(asm_file, yaml_file);
+            } else {
+                std::cerr << "Warning: no YAML for " << asm_file << "\n";
+            }
+        }
+    }
+    return 0;
 }
 

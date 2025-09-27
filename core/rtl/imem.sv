@@ -12,7 +12,7 @@ logic [31:0] rom [1<<AW];
 
 initial begin
    // load program
-   $readmemh("tb/firmware.hex", rom);
+   $readmemh("tb/roms/firmware.hex", rom);
 end
 
 // synchronous read

@@ -8,7 +8,7 @@ coverage.dat
 logs/
 
 # Test bench firmaware
-tb/firmware.hex
+*.hex
 
 # Stamp files for build system
 .stamp.*
