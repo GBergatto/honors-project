@@ -19,8 +19,9 @@ always_comb next_pc = pc + 1;
 /* Instruction Memory */
 logic [31:0] inst;
 imem #(8) imem_i (
-   .rst (rst),
    .clk (clk),
+   .rst (rst),
+   .enable (!stall),
    .pc (pc),
    .inst (inst)
 );
