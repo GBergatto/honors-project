@@ -3,7 +3,6 @@
 #include "Vhp_core_regfile.h"
 #include "verilated.h"
 #include "verilated_vcd_c.h"
-#include "common.hpp"
 
 #include <cstdint>
 #include <cstdlib>
@@ -12,9 +11,17 @@
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <sstream>
 #include <yaml-cpp/yaml.h>  // requires yaml-cpp
 
 namespace fs = std::filesystem;
+
+#define TESTNAME_LENGTH 25
+
+// ANSI colors helpers
+#define RESET   "\033[0m"
+#define RED     "\033[31m"
+#define GREEN   "\033[32m"
 
 // Convert firmware from binary into HEX
 int bin_to_hex(const fs::path& bin_file, const fs::path& hex_file) {
@@ -64,8 +71,6 @@ int assemble_to_hex(const fs::path& asm_file, const fs::path& hex_file) {
 }
 
 void run_test(const fs::path& asm_file, const fs::path& yaml_file) {
-    std::cout << "\n[TEST] " << asm_file.stem().string() << std::endl;
-
     // 1) assemble program
     fs::path hex_file = "tb/roms/firmware.hex";
     int n_instructions = assemble_to_hex(asm_file, hex_file);
@@ -109,9 +114,29 @@ void run_test(const fs::path& asm_file, const fs::path& yaml_file) {
     }
 
     // 5) check registers
+    bool isPassing = true;
+    std::stringstream log_buffer; // Buffer for register dump
+
     for (auto& [idx, exp_val] : expected) {
         uint32_t got = dut->hp_core->regfile_i->get_reg(idx);
-        check("x" + std::to_string(idx), got, exp_val);
+
+        log_buffer << "   x" << std::dec << idx << "=0x" << std::hex << got;
+
+        if (got != exp_val) {
+            isPassing = false;
+            log_buffer << " != 0x" << exp_val;
+        }
+        log_buffer << "\n";
+    }
+
+    // Print Test Name
+    std::cout << std::left << std::setw(TESTNAME_LENGTH) << asm_file.stem().string();
+
+    if (isPassing) {
+        std::cout << GREEN << "[PASS]" << RESET << std::endl;
+    } else {
+        std::cout << RED << "[FAIL]" << RESET << std::endl;
+        std::cout << log_buffer.str(); // Dump all regs only on failure
     }
 
     // cleanup
@@ -125,18 +150,49 @@ void run_test(const fs::path& asm_file, const fs::path& yaml_file) {
 int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);
 
-    for (auto& entry : fs::directory_iterator("tb/roms")) {
-        if (entry.path().extension() == ".s") {
-            fs::path asm_file = entry.path();
-            fs::path yaml_file = asm_file;
-            yaml_file.replace_extension(".yaml");
-            if (fs::exists(yaml_file)) {
-                run_test(asm_file, yaml_file);
-            } else {
-                std::cerr << "Warning: no YAML for " << asm_file << "\n";
+    std::vector<fs::path> test_files;
+
+    if (fs::exists("tb/roms") && fs::is_directory("tb/roms")) {
+        for (auto& entry : fs::recursive_directory_iterator("tb/roms")) {
+            if (entry.is_regular_file() && entry.path().extension() == ".s") {
+                test_files.push_back(entry.path());
             }
         }
+    } else {
+        std::cerr << "Error: 'tb/roms' directory not found.\n";
+        return 1;
     }
+
+    std::sort(test_files.begin(), test_files.end());
+    fs::path last_parent_dir = "";
+
+    for (const auto& asm_file : test_files) {
+        fs::path yaml_file = asm_file;
+        yaml_file.replace_extension(".yaml");
+
+        // Logic to print directory header centered in the line
+        fs::path current_parent_dir = asm_file.parent_path().filename();
+        if (current_parent_dir != last_parent_dir) {
+            std::string dirname = current_parent_dir.string();
+
+            int target_width = TESTNAME_LENGTH + 6;
+            int padding = target_width - (int)dirname.length() - 2;
+            if (padding < 4) padding = 4; // Ensure at least 2 dashes per side
+
+            int left_pad = padding / 2;
+            int right_pad = padding - left_pad;
+
+            std::cout << "\n" << std::string(left_pad, '-') << " "
+                << dirname << " " << std::string(right_pad, '-') << std::endl;
+
+            last_parent_dir = current_parent_dir;
+        }
+
+        if (fs::exists(yaml_file)) {
+            run_test(asm_file, yaml_file);
+        }
+    }
+
     return 0;
 }
 
