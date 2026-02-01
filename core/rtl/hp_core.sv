@@ -78,6 +78,7 @@ control control_i (
 
 alu_op_t alu_op;
 alu_control alu_control_i (
+   .opcode (opcode),
    .funct3 (funct3),
    .funct7 (funct7),
    .alu_op (alu_op)
@@ -85,9 +86,23 @@ alu_control alu_control_i (
 
 /* Hazard Detection (during ID) */
 logic stall;
-assign stall = (IDEX_rd  != 0 && IDEX_ctrl.reg_write  && (rs1 == IDEX_rd  || (!alu_src && rs2 == IDEX_rd ))) ||
-               (EXMEM_rd != 0 && EXMEM_ctrl.reg_write && (rs1 == EXMEM_rd || (!alu_src && rs2 == EXMEM_rd))) ||
-               (MEMWB_rd != 0 && MEMWB_ctrl.reg_write && (rs1 == MEMWB_rd || (!alu_src && rs2 == MEMWB_rd)));
+
+// Helper signal to determine if rs2 is used
+logic rs2_used;
+assign rs2_used = !alu_src || mem_write; 
+
+assign stall = 
+    // Check Hazard with ID/EX Stage
+    (IDEX_rd != 0 && IDEX_ctrl.reg_write &&
+        (rs1 == IDEX_rd || (rs2_used && rs2 == IDEX_rd))) ||
+
+    // Check Hazard with EX/MEM Stage
+    (EXMEM_rd != 0 && EXMEM_ctrl.reg_write &&
+        (rs1 == EXMEM_rd || (rs2_used && rs2 == EXMEM_rd))) ||
+
+    // Check Hazard with MEM/WB Stage
+    (MEMWB_rd != 0 && MEMWB_ctrl.reg_write &&
+        (rs1 == MEMWB_rd || (rs2_used && rs2 == MEMWB_rd)));
 
 /* Register File */
 logic reg_write, mem_to_reg, mem_read, mem_write;
@@ -210,18 +225,16 @@ typedef struct packed {
 
 /* verilator lint_off UNUSEDSIGNAL */
 ctrl_memwb_t MEMWB_ctrl;
-logic [31:0] MEMWB_mem_out, MEMWB_alu_out;
+logic [31:0] MEMWB_alu_out;
 logic [4:0]  MEMWB_rd;
 always_ff @(posedge clk or posedge rst) begin
    if (rst) begin
       MEMWB_alu_out <= 0;
-      MEMWB_mem_out <= 0;
       MEMWB_rd <= 0;
       MEMWB_ctrl.mem_to_reg <= 0;
       MEMWB_ctrl.reg_write <= 0;
    end else begin
       MEMWB_alu_out <= EXMEM_alu_out;
-      MEMWB_mem_out <= mem_out;
       MEMWB_rd <= EXMEM_rd;
       MEMWB_ctrl.mem_to_reg <= EXMEM_ctrl.mem_to_reg;
       MEMWB_ctrl.reg_write <= EXMEM_ctrl.reg_write;
@@ -229,7 +242,7 @@ always_ff @(posedge clk or posedge rst) begin
 end
 
 /* Write Back */
-assign wb_data = (MEMWB_ctrl.mem_to_reg) ? MEMWB_mem_out : MEMWB_alu_out;
+assign wb_data = (MEMWB_ctrl.mem_to_reg) ? mem_out : MEMWB_alu_out;
 
 endmodule
 

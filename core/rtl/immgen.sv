@@ -9,10 +9,13 @@ assign opcode = inst[6:0];
 
 always_comb begin
    case (opcode)
-      7'b0010011: // ALU immediate
+      7'b0010011, 7'b0000011: // I-type
          imm = {{20{inst[31]}}, inst[31:20]};
 
-      // TODO: support other instruction types
+      7'b0100011: // S-type
+         imm = {{20{inst[31]}}, inst[31:25], inst[11:7]};
+
+      // TODO: support missing instruction types
 
       default:
          imm = 32'h0;
