@@ -1,20 +1,54 @@
+/* verilator lint_off IMPORTSTAR */
+import core_types_pkg::*;
+
 module hp_core (
     input logic clk,
     input logic rst
 );
 
-/* Program Counter */
-logic [31:2] pc, next_pc; // no low 2 bits because we're only addressing 32-bit instructions
+/* Control Signals Structs */
+typedef struct packed {
+   alu_op_t alu_op;
+   logic alu_src;
+   logic reg_write;
+   logic mem_write;
+   logic mem_read;
+   logic mem_to_reg;
+} ctrl_E_t;
 
+typedef struct packed {
+   logic mem_read;
+   logic mem_write;
+   logic reg_write;
+   logic mem_to_reg;
+} ctrl_M_t;
+
+typedef struct packed {
+    logic reg_write;
+    logic mem_to_reg;
+} ctrl_W_t;
+
+
+ctrl_E_t ctrl_E;
+ctrl_M_t ctrl_M;
+ctrl_W_t ctrl_W;
+
+// ===================================================================================
+// Fetch Stage
+// ===================================================================================
+logic stall;
+logic [31:2] pc, pc_plus4; // no low 2 bits because we're only addressing 32-bit instructions
+
+/* Program Counter */
 always_ff @(posedge clk or posedge rst) begin
    if (rst)
       pc <= 30'h0;
    else if (!stall)
-      pc <= next_pc;
+      pc <= pc_plus4;
 end
 
 // TODO: implement branching
-always_comb next_pc = pc + 1;
+always_comb pc_plus4 = pc + 1;
 
 /* Instruction Memory */
 logic [31:0] inst;
@@ -26,45 +60,49 @@ imem #(8) imem_i (
    .inst (inst)
 );
 
-/* == IF/ID pipeline registers == */
-logic [31:2] IFID_next_pc;
-logic [31:0] IFID_inst;
+// ===================================================================================
+// Decode Stage
+// ===================================================================================
+logic [31:2] pc_D;
+logic [31:0] inst_D;
+
+/* IF/ID pipeline registers */
 always_ff @(posedge clk or posedge rst) begin
    if (rst) begin
-      IFID_next_pc <= 30'b0;
-      IFID_inst <= 32'b0;
+      pc_D <= 30'b0;
+      inst_D <= 32'b0;
    end else if (!stall) begin
-      IFID_next_pc <= next_pc;
-      IFID_inst <= inst;
+      pc_D <= pc_plus4;
+      inst_D <= inst;
    end
 end
 
 /* Immediate Generator */
-logic [31:0] imm;
+logic [31:0] imm_D;
 immgen immgen_i (
-   .inst (IFID_inst),
-   .imm (imm)
+   .inst (inst_D),
+   .imm (imm_D)
 );
 
 /* Decoder */
 logic [6:0] opcode;
-logic [4:0] rd;
+logic [4:0] rd_D;
 logic [2:0] funct3;
-logic [4:0] rs1;
-logic [4:0] rs2;
+logic [4:0] rs1_D;
+logic [4:0] rs2_D;
 logic [6:0] funct7;
 
 always_comb begin
-   opcode = IFID_inst[6:0];
-   rd     = IFID_inst[11:7];
-   funct3 = IFID_inst[14:12];
-   rs1    = IFID_inst[19:15];
-   rs2    = IFID_inst[24:20];
-   funct7 = IFID_inst[31:25];
+   opcode = inst_D[6:0];
+   rd_D   = inst_D[11:7];
+   funct3 = inst_D[14:12];
+   rs1_D  = inst_D[19:15];
+   rs2_D  = inst_D[24:20];
+   funct7 = inst_D[31:25];
 end
 
 /* Control Logic */
-logic alu_src;
+logic alu_src, reg_write, mem_to_reg, mem_read, mem_write;
 control control_i (
    .opcode (opcode),
    .funct3 (funct3),
@@ -76,6 +114,7 @@ control control_i (
    .mem_to_reg (mem_to_reg)
 );
 
+/* ALU Control Logic */
 alu_op_t alu_op;
 alu_control alu_control_i (
    .opcode (opcode),
@@ -84,125 +123,109 @@ alu_control alu_control_i (
    .alu_op (alu_op)
 );
 
-/* Hazard Detection (during ID) */
-logic stall;
+logic [4:0] rd_E, rd_M, rd_W;
 
-// Helper signal to determine if rs2 is used
-logic rs2_used;
-assign rs2_used = !alu_src || mem_write; 
+/* Hazard Detection */
+logic rs2_used; // Helper signal to determine if rs2 is used
+assign rs2_used = !alu_src || mem_write;
 
-assign stall = 
-    // Check Hazard with ID/EX Stage
-    (IDEX_rd != 0 && IDEX_ctrl.reg_write &&
-        (rs1 == IDEX_rd || (rs2_used && rs2 == IDEX_rd))) ||
+assign stall =
+   // Compare Decode to Execute
+   (rd_E != 0 && ctrl_E.reg_write &&
+      (rs1_D == rd_E || (rs2_used && rs2_D == rd_E))) ||
 
-    // Check Hazard with EX/MEM Stage
-    (EXMEM_rd != 0 && EXMEM_ctrl.reg_write &&
-        (rs1 == EXMEM_rd || (rs2_used && rs2 == EXMEM_rd))) ||
+   // Compare Decode to Memory
+   (rd_M != 0 && ctrl_M.reg_write &&
+      (rs1_D == rd_M || (rs2_used && rs2_D == rd_M))) ||
 
-    // Check Hazard with MEM/WB Stage
-    (MEMWB_rd != 0 && MEMWB_ctrl.reg_write &&
-        (rs1 == MEMWB_rd || (rs2_used && rs2 == MEMWB_rd)));
+   // Compare Decode to Writeback
+   (rd_W != 0 && ctrl_W.reg_write &&
+      (rs1_D == rd_W || (rs2_used && rs2_D == rd_W)));
 
 /* Register File */
-logic reg_write, mem_to_reg, mem_read, mem_write;
 logic [31:0] rs1_data, rs2_data, wb_data;
 regfile regfile_i (
    .clk (clk),
-   .rs1 (rs1),
-   .rs2 (rs2),
-   .rd (MEMWB_rd),
+   .rs1 (rs1_D),
+   .rs2 (rs2_D),
+   .rd (rd_W),
    .rd_data (wb_data),
-   .write (MEMWB_ctrl.reg_write),
+   .write (ctrl_W.reg_write),
    .rs1_data (rs1_data),
    .rs2_data (rs2_data)
 );
 
-/* == ID/EX pipeline registers == */
-// TODO: use this struct as output of the control module??
-typedef struct packed {
-   alu_op_t alu_op; // from alu_control
-   logic alu_src; // the rest if from control
-   logic reg_write;
-   logic mem_write;
-   logic mem_read;
-   logic mem_to_reg;
-} ctrl_bundle_t;
-
-ctrl_bundle_t IDEX_ctrl;
-logic [31:0] IDEX_rs1_data, IDEX_rs2_data, IDEX_imm;
+// ===================================================================================
+// Execute Stage
+// ===================================================================================
+logic [31:0] rs1_data_E, rs2_data_E, imm_E;
 /* verilator lint_off UNUSEDSIGNAL */
-logic [31:2] IDEX_next_pc;
+logic [31:2] pc_E;
 /* verilator lint_off UNUSEDSIGNAL */
-logic [4:0] IDEX_rs1, IDEX_rs2, IDEX_rd; // TODO: hazard detection and forwarding
+logic [4:0] rs1_E, rs2_E; // TODO: hazard detection and forwarding
 
+/* ID/EX pipeline registers */
 always_ff @(posedge clk or posedge rst) begin
    if (rst) begin
-      IDEX_ctrl <= '0;
-      IDEX_rs1_data <= 0;
-      IDEX_rs2_data <= 0;
-      IDEX_imm <= 0;
-      IDEX_rs1 <= 0;
-      IDEX_rs2 <= 0;
+      ctrl_E <= '0;
+      rs1_data_E <= 0;
+      rs2_data_E <= 0;
+      imm_E <= 0;
+      rs1_E <= 0;
+      rs2_E <= 0;
    end else if (stall) begin
       // inject bubble in the EX stage, i.e. do nothing for one cycle
-      IDEX_ctrl <= '0;
-      IDEX_rd <= '0;
+      ctrl_E <= '0;
+      rd_E <= '0;
    end else begin
-      IDEX_ctrl.alu_op <= alu_op;
-      IDEX_ctrl.alu_src <= alu_src;
-      IDEX_ctrl.reg_write <= reg_write;
-      IDEX_ctrl.mem_write <= mem_write;
-      IDEX_ctrl.mem_read <= mem_read;
-      IDEX_ctrl.mem_to_reg <= mem_to_reg;
+      ctrl_E.alu_op <= alu_op;
+      ctrl_E.alu_src <= alu_src;
+      ctrl_E.reg_write <= reg_write;
+      ctrl_E.mem_write <= mem_write;
+      ctrl_E.mem_read <= mem_read;
+      ctrl_E.mem_to_reg <= mem_to_reg;
 
-      IDEX_rs1_data <= rs1_data;
-      IDEX_rs2_data <= rs2_data;
-      IDEX_imm <= imm;
-      IDEX_rs1 <= rs1;
-      IDEX_rs2 <= rs2;
-      IDEX_rd <= rd;
-      IDEX_next_pc <= IFID_next_pc;
+      rs1_data_E <= rs1_data;
+      rs2_data_E <= rs2_data;
+      imm_E <= imm_D;
+      rs1_E <= rs1_D;
+      rs2_E <= rs2_D;
+      rd_E <= rd_D;
+      pc_E <= pc_D;
    end
 end
 
 /* ALU */
-logic [31:0] y, alu_out;
-assign y = (IDEX_ctrl.alu_src) ? IDEX_imm : IDEX_rs2_data;
+logic [31:0] y, alu_out_D;
+assign y = (ctrl_E.alu_src) ? imm_E : rs2_data_E;
 
 alu alu_i (
-   .op1 (IDEX_rs1_data),
-   .op2 (y),
-   .alu_op (IDEX_ctrl.alu_op),
-   .out (alu_out)
+   .op1 (signed'(rs1_data_E)),
+   .op2 (signed'(y)),
+   .alu_op (ctrl_E.alu_op),
+   .out (alu_out_D)
 );
 
-/* == EX/MEM pipeline registers == */
-typedef struct packed {
-   logic mem_read;
-   logic mem_write;
-   logic reg_write;
-   logic mem_to_reg;
-} ctrl_exmem_t;
-
+// ===================================================================================
+// Memory Stage
+// ===================================================================================
 /* verilator lint_off UNUSEDSIGNAL */
-ctrl_exmem_t EXMEM_ctrl;
-logic [31:0] EXMEM_alu_out, EXMEM_rs2_data;
-logic [4:0]  EXMEM_rd;
+logic [31:0] alu_out_M, rs2_data_M;
 
+/* EX/MEM pipeline registers */
 always_ff @(posedge clk or posedge rst) begin
    if (rst) begin
-      EXMEM_ctrl <= '0;
-      EXMEM_alu_out <= 0; EXMEM_rs2_data <= 0; EXMEM_rd <= 0;
+      ctrl_M <= '0;
+      alu_out_M <= 0; rs2_data_M <= 0; rd_M <= 0;
    end else begin
-      EXMEM_ctrl.reg_write <= IDEX_ctrl.reg_write;
-      EXMEM_ctrl.mem_read  <= IDEX_ctrl.mem_read;
-      EXMEM_ctrl.mem_write <= IDEX_ctrl.mem_write;
-      EXMEM_ctrl.mem_to_reg <= IDEX_ctrl.mem_to_reg;
+      ctrl_M.reg_write <= ctrl_E.reg_write;
+      ctrl_M.mem_read  <= ctrl_E.mem_read;
+      ctrl_M.mem_write <= ctrl_E.mem_write;
+      ctrl_M.mem_to_reg <= ctrl_E.mem_to_reg;
 
-      EXMEM_alu_out <= alu_out;
-      EXMEM_rs2_data <= IDEX_rs2_data;
-      EXMEM_rd <= IDEX_rd;
+      alu_out_M <= alu_out_D;
+      rs2_data_M <= rs2_data_E;
+      rd_M <= rd_E;
    end
 end
 
@@ -210,39 +233,35 @@ end
 logic [31:0] mem_out;
 dmem #(8) dmem_i (
    .clk (clk),
-   .re (EXMEM_ctrl.mem_read),
-   .we (EXMEM_ctrl.mem_write),
-   .addr (EXMEM_alu_out),
-   .wdata (EXMEM_rs2_data),
+   .re (ctrl_M.mem_read),
+   .we (ctrl_M.mem_write),
+   .addr (alu_out_M),
+   .wdata (rs2_data_M),
    .rdata (mem_out)
 );
 
-/* == MEM/WB pipeline registers == */
-typedef struct packed {
-    logic reg_write;
-    logic mem_to_reg;
-} ctrl_memwb_t;
-
+// ===================================================================================
+// Writeback Stage
+// ===================================================================================
 /* verilator lint_off UNUSEDSIGNAL */
-ctrl_memwb_t MEMWB_ctrl;
-logic [31:0] MEMWB_alu_out;
-logic [4:0]  MEMWB_rd;
+logic [31:0] alu_out_W;
+
+/* MEM/WB pipeline registers */
 always_ff @(posedge clk or posedge rst) begin
    if (rst) begin
-      MEMWB_alu_out <= 0;
-      MEMWB_rd <= 0;
-      MEMWB_ctrl.mem_to_reg <= 0;
-      MEMWB_ctrl.reg_write <= 0;
+      alu_out_W <= 0;
+      rd_W <= 0;
+      ctrl_W.mem_to_reg <= 0;
+      ctrl_W.reg_write <= 0;
    end else begin
-      MEMWB_alu_out <= EXMEM_alu_out;
-      MEMWB_rd <= EXMEM_rd;
-      MEMWB_ctrl.mem_to_reg <= EXMEM_ctrl.mem_to_reg;
-      MEMWB_ctrl.reg_write <= EXMEM_ctrl.reg_write;
+      alu_out_W <= alu_out_M;
+      rd_W <= rd_M;
+      ctrl_W.mem_to_reg <= ctrl_M.mem_to_reg;
+      ctrl_W.reg_write <= ctrl_M.reg_write;
    end
 end
 
-/* Write Back */
-assign wb_data = (MEMWB_ctrl.mem_to_reg) ? mem_out : MEMWB_alu_out;
+assign wb_data = (ctrl_W.mem_to_reg) ? mem_out : alu_out_W;
 
 endmodule
 
