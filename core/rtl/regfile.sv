@@ -18,9 +18,24 @@ logic [31:0] regs[32];
     endfunction
 `endif
 
-// asynchronous read (x0 is hardwired to zero)
-assign rs1_data = (rs1 == 5'h0) ? 32'h0 : regs[rs1];
-assign rs2_data = (rs2 == 5'h0) ? 32'h0 : regs[rs2];
+// asynchronous read with write-through
+always_comb begin
+   if (rs1 == 5'h0) begin
+      rs1_data = 32'b0; // x0
+   end else if ((rs1 == rd) && write) begin
+      rs1_data = rd_data; // bypass
+   end else begin
+      rs1_data = regs[rs1];
+   end
+
+   if (rs2 == 5'h0) begin
+      rs2_data = 32'b0; // x0
+   end else if ((rs2 == rd) && write) begin
+      rs2_data = rd_data; // bypass
+   end else begin
+      rs2_data = regs[rs2];
+   end
+end
 
 // synchronous write
 always_ff @(posedge clk) begin

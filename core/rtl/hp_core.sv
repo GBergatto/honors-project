@@ -102,16 +102,16 @@ always_comb begin
 end
 
 /* Control Logic */
-logic alu_src, reg_write, mem_to_reg, mem_read, mem_write;
+logic alu_src_D, reg_write_D, mem_to_reg_D, mem_read_D, mem_write_D;
 control control_i (
    .opcode (opcode),
    .funct3 (funct3),
    .funct7 (funct7),
-   .alu_src (alu_src),
-   .reg_write (reg_write),
-   .mem_read (mem_read),
-   .mem_write (mem_write),
-   .mem_to_reg (mem_to_reg)
+   .alu_src (alu_src_D),
+   .reg_write (reg_write_D),
+   .mem_read (mem_read_D),
+   .mem_write (mem_write_D),
+   .mem_to_reg (mem_to_reg_D)
 );
 
 /* ALU Control Logic */
@@ -127,7 +127,7 @@ logic [4:0] rd_E, rd_M, rd_W;
 
 /* Hazard Detection */
 logic rs2_used; // Helper signal to determine if rs2 is used
-assign rs2_used = !alu_src || mem_write;
+assign rs2_used = !alu_src_D || mem_write_D;
 
 assign stall =
    // Compare Decode to Execute
@@ -136,11 +136,7 @@ assign stall =
 
    // Compare Decode to Memory
    (rd_M != 0 && ctrl_M.reg_write &&
-      (rs1_D == rd_M || (rs2_used && rs2_D == rd_M))) ||
-
-   // Compare Decode to Writeback
-   (rd_W != 0 && ctrl_W.reg_write &&
-      (rs1_D == rd_W || (rs2_used && rs2_D == rd_W)));
+      (rs1_D == rd_M || (rs2_used && rs2_D == rd_M)));
 
 /* Register File */
 logic [31:0] rs1_data, rs2_data, wb_data;
@@ -179,11 +175,11 @@ always_ff @(posedge clk or posedge rst) begin
       rd_E <= '0;
    end else begin
       ctrl_E.alu_op <= alu_op;
-      ctrl_E.alu_src <= alu_src;
-      ctrl_E.reg_write <= reg_write;
-      ctrl_E.mem_write <= mem_write;
-      ctrl_E.mem_read <= mem_read;
-      ctrl_E.mem_to_reg <= mem_to_reg;
+      ctrl_E.alu_src <= alu_src_D;
+      ctrl_E.reg_write <= reg_write_D;
+      ctrl_E.mem_write <= mem_write_D;
+      ctrl_E.mem_read <= mem_read_D;
+      ctrl_E.mem_to_reg <= mem_to_reg_D;
 
       rs1_data_E <= rs1_data;
       rs2_data_E <= rs2_data;
