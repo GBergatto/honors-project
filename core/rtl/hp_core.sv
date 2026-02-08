@@ -123,32 +123,46 @@ alu_control alu_control_i (
    .alu_op (alu_op)
 );
 
-logic [4:0] rd_E, rd_M, rd_W;
+logic [4:0] rd_E, rd_M, rd_W, rs1_E, rs2_E;
 
 /* Hazard Detection */
-logic rs2_used; // Helper signal to determine if rs2 is used
-assign rs2_used = !alu_src_D || mem_write_D;
+logic [1:0] forward_a_E, forward_b_E;
+// Stall only if the instruction in D reads the output of a load in E
+assign stall = ctrl_E.mem_read && (rd_E == rs1_D || rd_E == rs2_D);
 
-assign stall =
-   // Compare Decode to Execute
-   (rd_E != 0 && ctrl_E.reg_write &&
-      (rs1_D == rd_E || (rs2_used && rs2_D == rd_E))) ||
+// Forwarding for source op1
+always_comb begin
+   if (rd_M != 0 && rs1_E == rd_M && ctrl_M.reg_write) begin
+      forward_a_E = 2'b10; // Forward from MEM
+   end else if (rd_W != 0 && rs1_E == rd_W && ctrl_W.reg_write) begin
+      forward_a_E = 2'b01; // Forward from WB
+   end else begin
+      forward_a_E = 2'b00; // No Forwarding
+   end
+end
 
-   // Compare Decode to Memory
-   (rd_M != 0 && ctrl_M.reg_write &&
-      (rs1_D == rd_M || (rs2_used && rs2_D == rd_M)));
+// Forwarding for source B
+always_comb begin
+   if (rd_M != 0 && rs2_E == rd_M && ctrl_M.reg_write) begin
+      forward_b_E = 2'b10; // Forward from MEM
+   end else if (rd_W != 0 && rs2_E == rd_W && ctrl_W.reg_write) begin
+      forward_b_E = 2'b01; // Forward from WB
+   end else begin
+      forward_b_E = 2'b00; // No Forwarding
+   end
+end
 
 /* Register File */
-logic [31:0] rs1_data, rs2_data, wb_data;
+logic [31:0] rs1_data_D, rs2_data_D, result_W;
 regfile regfile_i (
    .clk (clk),
    .rs1 (rs1_D),
    .rs2 (rs2_D),
    .rd (rd_W),
-   .rd_data (wb_data),
+   .rd_data (result_W),
    .write (ctrl_W.reg_write),
-   .rs1_data (rs1_data),
-   .rs2_data (rs2_data)
+   .rs1_data (rs1_data_D),
+   .rs2_data (rs2_data_D)
 );
 
 // ===================================================================================
@@ -157,8 +171,6 @@ regfile regfile_i (
 logic [31:0] rs1_data_E, rs2_data_E, imm_E;
 /* verilator lint_off UNUSEDSIGNAL */
 logic [31:2] pc_E;
-/* verilator lint_off UNUSEDSIGNAL */
-logic [4:0] rs1_E, rs2_E; // TODO: hazard detection and forwarding
 
 /* ID/EX pipeline registers */
 always_ff @(posedge clk or posedge rst) begin
@@ -181,8 +193,8 @@ always_ff @(posedge clk or posedge rst) begin
       ctrl_E.mem_read <= mem_read_D;
       ctrl_E.mem_to_reg <= mem_to_reg_D;
 
-      rs1_data_E <= rs1_data;
-      rs2_data_E <= rs2_data;
+      rs1_data_E <= rs1_data_D;
+      rs2_data_E <= rs2_data_D;
       imm_E <= imm_D;
       rs1_E <= rs1_D;
       rs2_E <= rs2_D;
@@ -191,13 +203,32 @@ always_ff @(posedge clk or posedge rst) begin
    end
 end
 
+logic [31:0] write_data_E, op1, op2, alu_out_M;
+
+/* Forwarding Multiplexers */
+always_comb begin
+    case (forward_a_E)
+        2'b00: op1 = rs1_data_E; // No forwarding
+        2'b01: op1 = result_W;   // Forwarded from Writeback stage
+        2'b10: op1 = alu_out_M;  // Forwarded from Memory stage
+        default: op1 = rs1_data_E;
+    endcase
+
+    case (forward_b_E)
+        2'b00: write_data_E = rs2_data_E; // No forwarding
+        2'b01: write_data_E = result_W;   // Forwarded from Writeback stage
+        2'b10: write_data_E = alu_out_M;  // Forwarded from Memory stage
+        default: write_data_E = rs2_data_E;
+    endcase
+end
+
 /* ALU */
-logic [31:0] y, alu_out_D;
-assign y = (ctrl_E.alu_src) ? imm_E : rs2_data_E;
+logic [31:0] alu_out_D;
+assign op2 = (ctrl_E.alu_src) ? imm_E : write_data_E;
 
 alu alu_i (
-   .op1 (signed'(rs1_data_E)),
-   .op2 (signed'(y)),
+   .op1 (signed'(op1)),
+   .op2 (signed'(op2)),
    .alu_op (ctrl_E.alu_op),
    .out (alu_out_D)
 );
@@ -205,14 +236,13 @@ alu alu_i (
 // ===================================================================================
 // Memory Stage
 // ===================================================================================
-/* verilator lint_off UNUSEDSIGNAL */
-logic [31:0] alu_out_M, rs2_data_M;
+logic [31:0] write_data_M;
 
 /* EX/MEM pipeline registers */
 always_ff @(posedge clk or posedge rst) begin
    if (rst) begin
       ctrl_M <= '0;
-      alu_out_M <= 0; rs2_data_M <= 0; rd_M <= 0;
+      alu_out_M <= 0; write_data_M <= 0; rd_M <= 0;
    end else begin
       ctrl_M.reg_write <= ctrl_E.reg_write;
       ctrl_M.mem_read  <= ctrl_E.mem_read;
@@ -220,7 +250,7 @@ always_ff @(posedge clk or posedge rst) begin
       ctrl_M.mem_to_reg <= ctrl_E.mem_to_reg;
 
       alu_out_M <= alu_out_D;
-      rs2_data_M <= rs2_data_E;
+      write_data_M <= write_data_E;
       rd_M <= rd_E;
    end
 end
@@ -232,14 +262,13 @@ dmem #(8) dmem_i (
    .re (ctrl_M.mem_read),
    .we (ctrl_M.mem_write),
    .addr (alu_out_M),
-   .wdata (rs2_data_M),
+   .wdata (write_data_M),
    .rdata (mem_out)
 );
 
 // ===================================================================================
 // Writeback Stage
 // ===================================================================================
-/* verilator lint_off UNUSEDSIGNAL */
 logic [31:0] alu_out_W;
 
 /* MEM/WB pipeline registers */
@@ -257,7 +286,7 @@ always_ff @(posedge clk or posedge rst) begin
    end
 end
 
-assign wb_data = (ctrl_W.mem_to_reg) ? mem_out : alu_out_W;
+assign result_W = (ctrl_W.mem_to_reg) ? mem_out : alu_out_W;
 
 endmodule
 
