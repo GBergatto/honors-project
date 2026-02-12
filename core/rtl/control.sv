@@ -8,10 +8,14 @@ module control (
    output logic reg_write,
    output logic mem_write,
    output logic mem_read,
-   output logic mem_to_reg
+   output logic [1:0] result_src,
+   output logic branch,
+   output logic jump,
+   output logic jump_reg
 );
 
-assign alu_src = (opcode != 7'b0110011);
+// ALU source op2 is Immediate for everything except R-Types and Branches
+assign alu_src = (opcode != 7'b0110011) && (opcode != 7'b1100011);
 
 always_comb begin
    case (opcode)
@@ -25,6 +29,19 @@ end
 
 assign mem_write = (opcode == 7'b0100011);
 assign mem_read = (opcode == 7'b0000011);
-assign mem_to_reg = (opcode == 7'b0000011);
+always_comb begin
+   case (opcode)
+      7'b1101111, // JAL
+      7'b1100111: // JALR
+         result_src = 2'b10;
+      7'b0000011: // load
+         result_src = 2'b01;
+      default: result_src = 2'b00;
+   endcase
+end
+
+assign jump = (opcode == 7'b1101111 || opcode == 7'b1100111);
+assign branch = (opcode == 7'b1100011);
+assign jump_reg = (opcode == 7'b1100111);
 
 endmodule
